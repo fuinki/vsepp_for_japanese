@@ -1,5 +1,11 @@
 # 日本語版 Improving Visual-Semantic Embeddings with Hard Negatives
 
+## 変更点
+主な変更点は下記の通りです。
+* 日本語への対応
+* Stair Captionsデータセットの使用
+
+
 Code for the image-caption retrieval methods from
 **[VSE++: Improving Visual-Semantic Embeddings with Hard Negatives](https://arxiv.org/abs/1707.05612)**
 *, F. Faghri, D. J. Fleet, J. R. Kiros, S. Fidler, Proceedings of the British Machine Vision Conference (BMVC),  2018. (BMVC Spotlight)*
