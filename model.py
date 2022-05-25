@@ -238,7 +238,7 @@ class EncoderText(nn.Module):
 
         return out
 
-# BERT Based Language Model
+# BERTを使用
 class BertEncoderText(nn.Module):
 
     def __init__(self, vocab_size, word_dim, embed_size, num_layers,

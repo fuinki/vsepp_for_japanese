@@ -1,4 +1,4 @@
-# Improving Visual-Semantic Embeddings with Hard Negatives
+# 日本語版 Improving Visual-Semantic Embeddings with Hard Negatives
 
 Code for the image-caption retrieval methods from
 **[VSE++: Improving Visual-Semantic Embeddings with Hard Negatives](https://arxiv.org/abs/1707.05612)**
