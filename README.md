@@ -4,6 +4,7 @@
 主な変更点は下記の通りです。
 * 日本語への対応
 * Stair Captionsデータセットの使用
+* Text EncoderとしてBERTを追加し、精度を向上させた
 
 
 Code for the image-caption retrieval methods from
