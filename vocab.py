@@ -7,7 +7,10 @@ import json
 import argparse
 import os
 
+
 annotations = {
+    'stair_captions': ['stair_captions_v1.2_train_tokenized.json', 
+                       'stair_captions_v1.2_val_tokenized.json'],
     'coco_precomp': ['train_caps.txt', 'dev_caps.txt'],
     'coco': ['annotations/captions_train2014.json',
              'annotations/captions_val2014.json'],
@@ -47,7 +50,8 @@ def from_coco_json(path):
     ids = coco.anns.keys()
     captions = []
     for i, idx in enumerate(ids):
-        captions.append(str(coco.anns[idx]['caption']))
+        captions.append(str(coco.anns[idx]['tokenized_caption']))
+    #    captions.append(str(coco.anns[idx]['caption']))
 
     return captions
 
@@ -74,19 +78,26 @@ def build_vocab(data_path, data_name, jsons, threshold):
     counter = Counter()
     for path in jsons[data_name]:
         full_path = os.path.join(os.path.join(data_path, data_name), path)
-        if data_name == 'coco':
+        if data_name == 'coco' or data_name == 'stair_captions':
             captions = from_coco_json(full_path)
         elif data_name == 'f8k' or data_name == 'f30k':
             captions = from_flickr_json(full_path)
         else:
             captions = from_txt(full_path)
         for i, caption in enumerate(captions):
-            tokens = nltk.tokenize.word_tokenize(
-                caption.lower().decode('utf-8'))
+
+            if data_name != 'stair_captions':
+                tokens = nltk.tokenize.word_tokenize(
+                    caption.lower())
+    #                caption.lower().decode('utf-8'))
+            else:
+                tokens = caption.split()
             counter.update(tokens)
 
             if i % 1000 == 0:
                 print("[%d/%d] tokenized the captions." % (i, len(captions)))
+        #        print(caption)
+        #        print(tokens)
 
     # Discard if the occurrence of the word is less than min_word_cnt.
     words = [word for word, cnt in counter.items() if cnt >= threshold]
@@ -106,14 +117,15 @@ def build_vocab(data_path, data_name, jsons, threshold):
 
 def main(data_path, data_name):
     vocab = build_vocab(data_path, data_name, jsons=annotations, threshold=4)
-    with open('./vocab/%s_vocab.pkl' % data_name, 'wb') as f:
+#    with open('./vocab/%s_vocab.pkl' % data_name, 'wb') as f:
+    with open('./vocab/%s_vocab_test.pkl' % data_name, 'wb') as f:
         pickle.dump(vocab, f, pickle.HIGHEST_PROTOCOL)
     print("Saved vocabulary file to ", './vocab/%s_vocab.pkl' % data_name)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', default='/w/31/faghri/vsepp_data/')
+    parser.add_argument('--data_path', default='./data/')
     parser.add_argument('--data_name', default='coco',
                         help='{coco,f8k,f30k,10crop}_precomp|coco|f8k|f30k')
     opt = parser.parse_args()

@@ -8,6 +8,8 @@ from pycocotools.coco import COCO
 import numpy as np
 import json as jsonmod
 
+from transformers import BertJapaneseTokenizer
+tokenizer = BertJapaneseTokenizer.from_pretrained('cl-tohoku/bert-base-japanese-whole-word-masking')
 
 def get_paths(path, name='coco', use_restval=False):
     """
@@ -71,7 +73,35 @@ def get_paths(path, name='coco', use_restval=False):
         roots['val'] = {'img': imgdir, 'cap': cap}
         roots['test'] = {'img': imgdir, 'cap': cap}
         ids = {'train': None, 'val': None, 'test': None}
-
+    elif 'stair_captions' == name:
+        imgdir = os.path.join('data/coco/', 'images')
+        capdir = os.path.join('data/coco/', 'annotations')
+        roots['train'] = {
+            'img': os.path.join(imgdir, 'train2014'),
+            'cap': os.path.join(capdir, 'stair_captions_train2014_tokenized.json')
+        }
+        roots['val'] = {
+            'img': os.path.join(imgdir, 'val2014'),
+            'cap': os.path.join(capdir, 'stair_captions_val2014_tokenized.json')
+        }
+        roots['test'] = {
+            'img': os.path.join(imgdir, 'val2014'),
+            'cap': os.path.join(capdir, 'stair_captions_val2014_tokenized.json')
+        }
+        roots['trainrestval'] = {
+            'img': (roots['train']['img'], roots['val']['img']),
+            'cap': (roots['train']['cap'], roots['val']['cap'])
+        }
+        #ids['train'] = np.load(os.path.join(capdir, 'coco_train_ids.npy'))
+        ids['train'] = np.load(os.path.join(capdir, 'test.npy'))
+        ids['val'] = np.load(os.path.join(capdir, 'test_val.npy'))[:5000]
+        ids['test'] = np.load(os.path.join(capdir, 'test_test.npy'))
+        ids['trainrestval'] = (
+            ids['train'],
+            np.load(os.path.join(capdir, 'coco_restval_ids.npy')))
+        if use_restval:
+            roots['train'] = roots['trainrestval']
+            ids['train'] = ids['trainrestval']
     return roots, ids
 
 
@@ -117,14 +147,46 @@ class CocoDataset(data.Dataset):
         if self.transform is not None:
             image = self.transform(image)
 
-        # Convert caption (string) to word ids.
-        tokens = nltk.tokenize.word_tokenize(
-            str(caption).lower())
-        caption = []
-        caption.append(vocab('<start>'))
-        caption.extend([vocab(token) for token in tokens])
-        caption.append(vocab('<end>'))
-        target = torch.Tensor(caption)
+        if vocab != None:
+
+            # Convert caption (string) to word ids.
+
+            # for English
+            #tokens = nltk.tokenize.word_tokenize(
+            #   str(caption).lower())
+
+            # for Japanese
+            tokens = caption.split()
+
+            caption = []
+            caption.append(vocab('<start>'))
+            caption.extend([vocab(token) for token in tokens])
+            caption.append(vocab('<end>'))
+            target = torch.Tensor(caption)
+        
+        else:
+            
+            """
+            target = tokenizer(
+                caption,
+                max_length = 32,
+                padding = 'max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+            #target = torch.Tensor(target)
+            #target = target['input_ids']
+            """
+
+            """
+            caption = []
+            caption.append(2)
+            caption.append(3)
+            caption.append(1)
+            target = torch.Tensor(caption)
+            """
+            target = caption
+
         return image, target, index, img_id
 
     def get_raw_item(self, index):
@@ -135,7 +197,12 @@ class CocoDataset(data.Dataset):
             coco = self.coco[1]
             root = self.root[1]
         ann_id = self.ids[index]
-        caption = coco.anns[ann_id]['caption']
+        #caption = coco.anns[ann_id]['caption']
+        if self.vocab == None:
+            caption = coco.anns[ann_id]['caption']
+        else:
+            caption = coco.anns[ann_id]['tokenized_caption']
+        
         img_id = coco.anns[ann_id]['image_id']
         path = coco.loadImgs(img_id)[0]['file_name']
         image = Image.open(os.path.join(root, path)).convert('RGB')
@@ -267,11 +334,36 @@ def collate_fn(data):
     return images, targets, lengths, ids
 
 
+def collate_fn_bert(data):
+    """Build mini-batch tensors from a list of (image, caption) tuples.
+    Args:
+        data: list of (image, caption) tuple.
+            - image: torch tensor of shape (3, 256, 256).
+            - caption: torch tensor of shape (?); variable length.
+
+    Returns:
+        images: torch tensor of shape (batch_size, 3, 256, 256).
+        targets: torch tensor of shape (batch_size, padded_length).
+        lengths: list; valid length for each padded caption.
+    """
+
+    # Sort a data list by caption length
+    images, captions, ids, img_ids = zip(*data)
+
+    # Merge images (convert tuple of 3D tensor to 4D tensor)
+    images = torch.stack(images, 0)
+
+    # Merget captions (convert tuple of 1D tensor to 2D tensor)
+    lengths = None
+
+    return images, captions, lengths, ids
+
+
 def get_loader_single(data_name, split, root, json, vocab, transform,
                       batch_size=100, shuffle=True,
                       num_workers=2, ids=None, collate_fn=collate_fn):
     """Returns torch.utils.data.DataLoader for custom coco dataset."""
-    if 'coco' in data_name:
+    if 'coco' in data_name or 'stair' in data_name:
         # COCO custom dataset
         dataset = CocoDataset(root=root,
                               json=json,
@@ -285,12 +377,21 @@ def get_loader_single(data_name, split, root, json, vocab, transform,
                                 transform=transform)
 
     # Data loader
-    data_loader = torch.utils.data.DataLoader(dataset=dataset,
-                                              batch_size=batch_size,
-                                              shuffle=shuffle,
-                                              pin_memory=True,
-                                              num_workers=num_workers,
-                                              collate_fn=collate_fn)
+    if vocab != None:
+        data_loader = torch.utils.data.DataLoader(dataset=dataset,
+                                                batch_size=batch_size,
+                                                shuffle=shuffle,
+                                                pin_memory=True,
+                                                num_workers=num_workers,
+                                                collate_fn=collate_fn)
+    else:
+        data_loader = torch.utils.data.DataLoader(dataset=dataset,
+                                                batch_size=batch_size,
+                                                shuffle=shuffle,
+                                                pin_memory=True,
+                                                num_workers=num_workers,
+                                                collate_fn=collate_fn_bert)
+
     return data_loader
 
 

@@ -66,6 +66,8 @@ def main():
                         (e.g. vgg19, resnet152)""")
     parser.add_argument('--use_restval', action='store_true',
                         help='Use the restval data for training on MSCOCO.')
+    parser.add_argument('--use_bert', action='store_true',
+                        help='Use the BERT model for text encoder.')                        
     parser.add_argument('--measure', default='cosine',
                         help='Similarity measure used (cosine|order)')
     parser.add_argument('--use_abs', action='store_true',
@@ -85,6 +87,10 @@ def main():
     vocab = pickle.load(open(os.path.join(
         opt.vocab_path, '%s_vocab.pkl' % opt.data_name), 'rb'))
     opt.vocab_size = len(vocab)
+
+    if opt.use_bert == True:
+        vocab = None
+        opt.vocab_size = None
 
     # Load data loaders
     train_loader, val_loader = data.get_loaders(
@@ -114,7 +120,6 @@ def main():
     best_rsum = 0
     for epoch in range(opt.num_epochs):
         adjust_learning_rate(opt, model.optimizer, epoch)
-
         # train for one epoch
         train(opt, train_loader, model, epoch, val_loader)
 
@@ -152,6 +157,9 @@ def train(opt, train_loader, model, epoch, val_loader):
 
         # make sure train logger is used
         model.logger = train_logger
+
+#        if i == 0:
+#            print(train_data)
 
         # Update the model
         model.train_emb(*train_data)
@@ -227,7 +235,15 @@ def adjust_learning_rate(opt, optimizer, epoch):
        decayed by 10 every 30 epochs"""
     lr = opt.learning_rate * (0.1 ** (epoch // opt.lr_update))
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        print(param_group['lr'])
+        if hasattr(opt,'use_bert') == False or opt.use_bert == False:
+            param_group['lr'] = lr
+        else:
+            if param_group['lr'] == opt.learning_rate:
+                param_group['lr'] = lr
+
+        print(param_group['lr'])
+        print("=======================")
 
 
 def accuracy(output, target, topk=(1,)):

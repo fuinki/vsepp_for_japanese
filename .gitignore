@@ -3,3 +3,6 @@
 *.ipynb_checkpoints
 *.json
 *.pth.tar
+data/
+runs/
+vocab/

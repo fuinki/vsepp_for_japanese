@@ -9,6 +9,8 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 import numpy as np
 from collections import OrderedDict
 
+from transformers import BertJapaneseTokenizer, BertModel
+tokenizer = BertJapaneseTokenizer.from_pretrained('cl-tohoku/bert-base-japanese-whole-word-masking')
 
 def l2norm(X):
     """L2-normalize columns of X
@@ -60,7 +62,13 @@ class EncoderImageFull(nn.Module):
                 *list(self.cnn.classifier.children())[:-1])
         elif cnn_type.startswith('resnet'):
             self.fc = nn.Linear(self.cnn.module.fc.in_features, embed_size)
+            print("fc.in_features:",self.cnn.module.fc.in_features)
             self.cnn.module.fc = nn.Sequential()
+        elif cnn_type.startswith('eff'):
+            self.fc = nn.Linear(self.cnn.classifier._modules['1'].in_features,
+                                embed_size)
+            self.cnn.classifier = nn.Sequential(
+                *list(self.cnn.classifier.children())[:-1])
 
         self.init_weights()
 
@@ -74,7 +82,7 @@ class EncoderImageFull(nn.Module):
             print("=> creating model '{}'".format(arch))
             model = models.__dict__[arch]()
 
-        if arch.startswith('alexnet') or arch.startswith('vgg'):
+        if arch.startswith('alexnet') or arch.startswith('vgg') or arch.startswith('eff'):
             model.features = nn.DataParallel(model.features)
         else:
             model = nn.DataParallel(model)
@@ -230,6 +238,39 @@ class EncoderText(nn.Module):
 
         return out
 
+# BERT Based Language Model
+class BertEncoderText(nn.Module):
+
+    def __init__(self, vocab_size, word_dim, embed_size, num_layers,
+                 use_abs=False):
+        super(BertEncoderText, self).__init__()
+        self.use_abs = use_abs
+        self.embed_size = embed_size
+
+        self.bert = BertModel.from_pretrained('cl-tohoku/bert-base-japanese-whole-word-masking',
+                                              output_attentions=True,
+                                              output_hidden_states=True)
+
+    def _get_cls_vec(self, vec):
+        return vec[:,0,:].view(-1, 768)
+
+    def forward(self, input_ids=None,attention_mask=None,token_type_ids=None):
+
+        output = self.bert(input_ids=input_ids,attention_mask=attention_mask,token_type_ids=token_type_ids)
+        attentions = output['attentions']
+        hidden_states = output['hidden_states']
+
+        # 最終４層の隠れ層からそれぞれclsトークンのベクトルを取得する
+        vec1 = self._get_cls_vec(hidden_states[-1])
+        vec2 = self._get_cls_vec(hidden_states[-2])
+        vec3 = self._get_cls_vec(hidden_states[-3])
+        vec4 = self._get_cls_vec(hidden_states[-4])
+
+        # 4つのclsトークンを結合して１つのベクトルにする。
+        vec = torch.cat([vec1, vec2, vec3, vec4], dim=1)
+#        vec = torch.cat([vec1, vec2], dim=1)
+        return l2norm(vec1)
+
 
 def cosine_sim(im, s):
     """Cosine similarity between all the image and sentence pairs
@@ -304,9 +345,15 @@ class VSE(object):
                                     opt.finetune, opt.cnn_type,
                                     use_abs=opt.use_abs,
                                     no_imgnorm=opt.no_imgnorm)
-        self.txt_enc = EncoderText(opt.vocab_size, opt.word_dim,
-                                   opt.embed_size, opt.num_layers,
-                                   use_abs=opt.use_abs)
+        if hasattr(opt,'use_bert') == False or opt.use_bert == False:
+            self.txt_enc = EncoderText(opt.vocab_size, opt.word_dim,
+                                    opt.embed_size, opt.num_layers,
+                                    use_abs=opt.use_abs)
+        elif opt.use_bert == True:
+            self.txt_enc = BertEncoderText(opt.vocab_size, opt.word_dim,
+                                    opt.embed_size, opt.num_layers,
+                                    use_abs=opt.use_abs)
+
         if torch.cuda.is_available():
             self.img_enc.cuda()
             self.txt_enc.cuda()
@@ -316,13 +363,35 @@ class VSE(object):
         self.criterion = ContrastiveLoss(margin=opt.margin,
                                          measure=opt.measure,
                                          max_violation=opt.max_violation)
-        params = list(self.txt_enc.parameters())
-        params += list(self.img_enc.fc.parameters())
-        if opt.finetune:
-            params += list(self.img_enc.cnn.parameters())
-        self.params = params
 
-        self.optimizer = torch.optim.Adam(params, lr=opt.learning_rate)
+        if hasattr(opt,'use_bert') == False or opt.use_bert == False:
+            params = list(self.txt_enc.parameters())
+            params += list(self.img_enc.fc.parameters())
+            if opt.finetune:
+                params += list(self.img_enc.cnn.parameters())
+            
+            self.params = params
+            self.optimizer = torch.optim.Adam(params, lr=opt.learning_rate)
+            
+        else:
+            for param in self.txt_enc.parameters():
+                param.requires_grad = False
+            for param in self.txt_enc.bert.encoder.layer[-1].parameters():
+                param.requires_grad = True
+            for param in self.txt_enc.bert.encoder.layer[-2].parameters():
+                param.requires_grad = True
+            params = list(self.txt_enc.bert.encoder.layer[-1].parameters() )
+            params += list(self.txt_enc.bert.encoder.layer[-2].parameters() )
+            params += list(self.img_enc.fc.parameters())
+            if opt.finetune:
+                params += list(self.img_enc.cnn.parameters())
+            self.params = params
+        
+            self.optimizer = torch.optim.Adam([
+                {'params':self.txt_enc.bert.encoder.layer[-1].parameters(),'lr':1e-4},
+                {'params':self.txt_enc.bert.encoder.layer[-2].parameters(),'lr':5e-5},
+                {'params':self.img_enc.fc.parameters()}
+            ], lr=opt.learning_rate)
 
         self.Eiters = 0
 
@@ -349,16 +418,36 @@ class VSE(object):
     def forward_emb(self, images, captions, lengths):
         """Compute the image and caption embeddings
         """
-        # Set mini-batch dataset
-        images = Variable(images)
-        captions = Variable(captions)
-        if torch.cuda.is_available():
-            images = images.cuda()
-            captions = captions.cuda()
+        if lengths != None:
+            # Set mini-batch dataset
+            images = Variable(images)
+            captions = Variable(captions)
+            if torch.cuda.is_available():
+                images = images.cuda()
+                captions = captions.cuda()
+        else:
+            images = Variable(images)
+            if torch.cuda.is_available():
+                images = images.cuda()            
 
         # Forward
         img_emb = self.img_enc(images)
-        cap_emb = self.txt_enc(captions, lengths)
+        if lengths != None:
+            cap_emb = self.txt_enc(captions, lengths)
+        else:
+            #captions = { k: v.cuda() for k,v in captions.items() }
+            #print("captions",captions)
+            encoding = tokenizer(
+                captions,
+                max_length = 50,
+                padding = 'max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+            encoding = { k: v.cuda() for k, v in encoding.items() } 
+            #captions = captions.cuda()
+            cap_emb = self.txt_enc(**encoding)
+            #print(cap_emb.size())
         return img_emb, cap_emb
 
     def forward_loss(self, img_emb, cap_emb, **kwargs):
