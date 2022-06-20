@@ -6,6 +6,12 @@
 * Stair Captionsデータセットの使用
 * Text EncoderとしてBERTを追加し、精度を向上させた
 
+## 検索結果の例
+* 画像検索
+![image](https://user-images.githubusercontent.com/3047275/174529861-d416bda8-143b-4fef-901c-1b2f0d820d61.png)
+* キャプション検索
+![image](https://user-images.githubusercontent.com/3047275/174529900-9c082444-b3cf-41a1-8361-0940373e5d19.png)
+
 
 
 Code for the image-caption retrieval methods from
